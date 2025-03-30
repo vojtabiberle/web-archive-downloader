@@ -1,0 +1,14 @@
+# AI rules
+1. We are working on Manjaro Linux
+2. Always write modular code to avoid long files. A long file is > 300 lines. Few lines add do not harm.
+3. Be sure to keep the README.md file up to date, so do this after each change when relevant
+4. Use the MCP servers available when needed
+5. Simplicity is key! Never over-engineer the solutions. Instead go for the simplest possible solution while maintaining functionality
+6. Whenever you come by a reference to some element or file that doesn't exist, check the codebase to see if we already have it by a different name. If so, use the correct name. If not, create it.
+7. Whenever you have an issue, you ALWAYS investigate and propose a fix to the root cause rather than quick, messy patches. 
+8. CRITICAL: Do not make assumptions about external dependencies. Your training data is often outdated, so you ALWAYS use web search to validate your assumptions about external dependencies!
+9. Do not start or restart the server unless explicitly asked to do so!!
+10. IMPORTANT: Do not do anything you haven't been asked to do, or haven't been asked to fix, or haven't presented to me first. NEVER!
+
+# Temporal
+For now pass all CLI commands to me, do not try to run them. Here is bug in VSCode that do not let you read terminal output and that leads you stuck in waiting loop.

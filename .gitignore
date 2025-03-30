@@ -1,0 +1,8 @@
+.aider*
+.env
+/output/*
+.roo*
+/memory-bank
+scraping.log
+processed_urls.json
+config.json

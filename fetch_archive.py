@@ -10,6 +10,7 @@ import re
 from datetime import datetime
 import sys
 import os.path # Added for relative path calculation
+from datetime import datetime # Ensure datetime is imported
 
 # --- Configuration Loading ---
 def load_config(config_path="config.json"):
@@ -781,6 +782,174 @@ def save_html(html_content, title, original_url, config):
         return False
 
 
+# --- Memento Fallback --- 
+def fetch_memento_snapshot(original_url, config, wayback_timestamp=None):
+    """Queries the Memento Time Travel API for a snapshot of the URL."""
+    user_agent = config['user_agent']
+    delay = config['request_delay_seconds']
+    max_retries = config['max_retries']
+    headers = {'User-Agent': user_agent}
+    retries = 0
+
+    # Use Wayback timestamp if available, otherwise current time
+    if wayback_timestamp and len(wayback_timestamp) == 14 and wayback_timestamp.isdigit():
+        memento_dt_str = wayback_timestamp
+    else:
+        memento_dt_str = datetime.now().strftime('%Y%m%d%H%M%S')
+
+    memento_api_url = f"http://timetravel.mementoweb.org/api/json/{memento_dt_str}/{original_url}"
+    logging.info(f"Querying Memento API: {memento_api_url}")
+
+    while retries <= max_retries:
+        try:
+            time.sleep(delay) # Apply delay
+            response = requests.get(memento_api_url, headers=headers, timeout=30)
+
+            if response.status_code == 200:
+                try:
+                    data = response.json()
+                    if data and 'mementos' in data and 'closest' in data['mementos'] and 'uri' in data['mementos']['closest']:
+                        memento_uri = data['mementos']['closest']['uri'][0] # URI is usually in a list
+                        # CRITICAL CHECK: Avoid web.archive.org loops
+                        if 'web.archive.org' in urlparse(memento_uri).netloc:
+                            logging.warning(f"Memento API returned a web.archive.org URI ({memento_uri}). Skipping fallback to avoid loop.")
+                            return None
+                        logging.info(f"Found potential Memento URI: {memento_uri}")
+                        return memento_uri
+                    else:
+                        logging.warning(f"Memento API response for {original_url} did not contain a usable closest memento URI. Response: {data}")
+                        return None
+                except json.JSONDecodeError:
+                    logging.error(f"Failed to decode JSON response from Memento API. URL: {memento_api_url}, Response text: {response.text[:500]}...")
+                    return None
+                except Exception as e:
+                    logging.error(f"Unexpected error processing Memento JSON response for {original_url}: {e}")
+                    return None
+            elif response.status_code == 404:
+                 logging.warning(f"Memento API returned 404 for {original_url} at timestamp {memento_dt_str}. No snapshot found.")
+                 return None # Don't retry 404
+            elif response.status_code == 429:
+                wait_time = 2**retries * delay
+                logging.warning(f"Rate limit hit (429) querying Memento API. Retrying in {wait_time:.2f} seconds...")
+                time.sleep(wait_time)
+                retries += 1
+            else:
+                logging.error(f"Memento API request failed with status code: {response.status_code}. URL: {memento_api_url}")
+                # Retry other errors up to max_retries
+                if retries < max_retries:
+                    wait_time = 2**retries * delay
+                    logging.warning(f"Retrying Memento API query ({retries+1}/{max_retries}) in {wait_time:.2f} seconds...")
+                    time.sleep(wait_time)
+                    retries += 1
+                else:
+                    logging.error("Max retries reached for Memento API query.")
+                    return None
+
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Network error during Memento API request: {e}")
+            if retries < max_retries:
+                logging.warning(f"Retrying Memento API query ({retries+1}/{max_retries})...")
+                time.sleep(2**retries * delay)
+                retries += 1
+            else:
+                logging.error("Max retries reached for Memento API query.")
+                return None
+
+    logging.error(f"Failed to query Memento API for {original_url} after multiple retries.")
+    return None
+
+def fetch_and_process_memento_content(memento_uri, original_url, config, processed_urls_set):
+    """Fetches, processes, and saves content from a Memento URI."""
+    user_agent = config['user_agent']
+    delay = config['request_delay_seconds']
+    max_retries = config['max_retries'] # Use same retries for fetching memento content
+    headers = {'User-Agent': user_agent}
+    retries = 0
+
+    logging.info(f"Attempting to fetch content from Memento URI: {memento_uri}")
+
+    while retries <= max_retries:
+        try:
+            time.sleep(delay)
+            response = requests.get(memento_uri, headers=headers, timeout=60)
+
+            if response.status_code == 200:
+                try:
+                    response.encoding = 'utf-8' # Assume UTF-8
+                    memento_html = response.text
+                    if memento_html and "<html" in memento_html.lower():
+                        logging.info(f"Successfully fetched HTML from Memento URI: {memento_uri}")
+
+                        # --- Process Memento HTML --- 
+                        # Note: Selectors might not match, parsing might be less clean.
+                        # Assets are NOT downloaded/rewritten for Memento sources currently.
+                        title, markdown_content, _ = extract_and_convert_content(memento_html, original_url, config, saved_assets_map={})
+
+                        if not title or not markdown_content:
+                            logging.warning(f"Failed to extract/convert content from Memento source {memento_uri} for original URL {original_url}. Skipping save.")
+                            return False # Indicate failure to process this memento source
+
+                        # Save markdown (using original URL for structure, but noting Memento source)
+                        # Use a placeholder timestamp or current time for the save function
+                        memento_timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
+                        save_success = save_markdown(title, markdown_content, original_url, memento_timestamp, config)
+                        
+                        if save_success:
+                            logging.info(f"Successfully saved content retrieved via Memento ({memento_uri}) for original URL {original_url}")
+                            # Update checkpoint for the *original* URL
+                            save_checkpoint(original_url, processed_urls_set, config['checkpoint_file'])
+                            return True # Indicate success for this original URL via Memento
+                        else:
+                            logging.error(f"Failed to save markdown derived from Memento source {memento_uri} for original URL {original_url}.")
+                            return False # Indicate failure
+                    else:
+                        logging.warning(f"Fetched empty or non-HTML content from Memento URI {memento_uri}. Skipping.")
+                        return False # Treat as failure for this source
+
+                except Exception as e:
+                    logging.error(f"Error processing content from Memento URI {memento_uri}: {e}", exc_info=True)
+                    return False # Treat processing error as failure
+
+            elif response.status_code == 404:
+                logging.warning(f"Memento URI not found (404): {memento_uri}. Skipping.")
+                return False # Don't retry 404
+            elif response.status_code == 429:
+                wait_time = 2**retries * delay
+                logging.warning(f"Rate limit hit (429) fetching Memento URI {memento_uri}. Retrying in {wait_time:.2f} seconds...")
+                time.sleep(wait_time)
+                retries += 1
+            # Add handling for potential blocks (e.g., 403 Forbidden)
+            elif response.status_code == 403:
+                 logging.warning(f"Access forbidden (403) for Memento URI {memento_uri}. Archive might block scraping. Skipping.")
+                 return False # Don't retry 403
+            elif response.status_code >= 500:
+                 wait_time = 2**retries * delay
+                 logging.warning(f"Server error ({response.status_code}) fetching Memento URI {memento_uri}. Retrying in {wait_time:.2f} seconds ({retries+1}/{max_retries})...")
+                 time.sleep(wait_time)
+                 retries += 1
+            else:
+                logging.error(f"Client error ({response.status_code}) fetching Memento URI {memento_uri}. Skipping.")
+                return False # Don't retry other client errors
+
+        except requests.exceptions.Timeout:
+            logging.warning(f"Timeout occurred fetching Memento URI {memento_uri}. Retrying ({retries+1}/{max_retries})...")
+            time.sleep(2**retries * delay)
+            retries += 1
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Network error fetching Memento URI {memento_uri}: {e}")
+            if retries < max_retries:
+                logging.warning(f"Retrying Memento URI fetch ({retries+1}/{max_retries})...")
+                time.sleep(2**retries * delay)
+                retries += 1
+            else:
+                logging.error(f"Max retries reached fetching Memento URI {memento_uri}.")
+                return False
+
+    logging.error(f"Failed to fetch content from Memento URI {memento_uri} after multiple retries.")
+    return False
+
+
+
 
 
 # --- Main Execution ---
@@ -831,14 +1000,42 @@ def main():
 
         logging.info(f"Processing URL {processed_count}/{total_urls} ({progress_percent:.1f}%): {original_url} @ {timestamp}")
 
-        # Fetch content
+        # Fetch content from Wayback Machine
         html_content = fetch_page_content(original_url, timestamp, config)
+        
+        memento_success = False # Flag to track if Memento fallback worked
         if not html_content:
-            logging.warning(f"Failed to fetch content for {original_url}. Skipping.")
-            fail_count += 1
-            continue
+            logging.warning(f"Failed to fetch content for {original_url} from Wayback Machine. Attempting Memento fallback...")
+            
+            # --- Memento Fallback ---
+            memento_uri = fetch_memento_snapshot(original_url, config, wayback_timestamp=timestamp)
+            if memento_uri:
+                # Pass the processed_urls set for checkpointing within the function
+                memento_success = fetch_and_process_memento_content(memento_uri, original_url, config, processed_urls)
+                if memento_success:
+                    success_count += 1 # Count as success if Memento worked
+                    # Checkpoint is handled within fetch_and_process_memento_content
+                    logging.info(f"Successfully processed {original_url} via Memento fallback.")
+                    continue # Skip the rest of the loop for this URL
+                else:
+                    logging.warning(f"Memento fallback failed to fetch/process content from {memento_uri} for {original_url}.")
+            else:
+                logging.warning(f"No suitable Memento snapshot found for {original_url}.")
+            # --- End Memento Fallback ---
+            
+            # If Memento fallback did not succeed, increment fail count and continue
+            if not memento_success:
+                logging.error(f"Failed to fetch content for {original_url} from both Wayback Machine and Memento.")
+                fail_count += 1
+                # Save failed URL to checkpoint? Optional, currently not doing this.
+                # save_checkpoint(original_url, processed_urls, config['checkpoint_file']) # Mark as processed (failed)
+                continue
 
-        # --- Start Asset/HTML Processing ---
+        # If we reach here, either Wayback fetch succeeded OR Memento fallback succeeded (and continued)
+        # If Wayback fetch succeeded, html_content is populated. If Memento succeeded, we already 'continued'.
+        # Therefore, the rest of the loop only executes if Wayback fetch succeeded.
+        
+        # --- Start Asset/HTML Processing (Only for Wayback Machine content) ---
 
         # 5. Save Original HTML (Optional)
         # Need title first for filename, extract it preliminarily

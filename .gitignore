@@ -1,8 +1,27 @@
+# Development tool specific
 .aider*
-.env
-/output/*
 .roo*
+.clinerules
 /memory-bank
-scraping.log
+insert-valiables.sh
+
+# Environment variables
+.env
+
+# Python specific
+__pycache__/
+.pytest_cache/
+venv/
+.venv/
+*.pyc
+*.pyo
+*.pyd
+
+# Output & Logs
+/output/
+*.log
 processed_urls.json
-config.json
+
+# OS specific
+.DS_Store
+Thumbs.db

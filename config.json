@@ -1,0 +1,26 @@
+{
+  "target_domain": "stromyvkrajine.cz",
+  "output_dir": "output",
+  "content_selectors": [
+    "#content",
+    "main",
+    ".main-content",
+    ".entry-content",
+    "article",
+    "body"
+  ],
+  "request_delay_seconds": 1.5,
+  "max_retries": 3,
+  "user_agent": "WebArchiveDownloader/1.0 (+https://github.com/vojtabiberle/web-archive-downloader)",
+  "checkpoint_file": "processed_urls.json",
+  "log_file": "scraping.log",
+  "cdx_api_url": "http://web.archive.org/cdx/search/cdx",
+  "request_timeout_api": 30,
+  "request_timeout_content": 60,
+  "download_js": false,
+  "download_css": true,
+  "download_images": true,
+  "save_original_html": true,
+  "rewrite_asset_links": true,
+  "asset_save_structure": "per_page"
+}
